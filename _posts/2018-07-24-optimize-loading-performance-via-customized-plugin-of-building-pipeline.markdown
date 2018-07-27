@@ -54,17 +54,37 @@ excerpt_separator: <!--more-->
 
 为了解决上述两个问题，我们意识到，需要设计如下两个功能：
 
-* 提供一个在游戏发布时自动将配置文件进行合并的功能，在开发期仍然使用合并前的配置文件，只有发布时才将配置文件进行自动合并
+* 提供一个在游戏发布时自动将配置文件进行合并的功能
 * 在游戏运行时代码进行尽可能小的调整，封装统一合并前配置与合并后配置的加载调用方式。
 
 
 
+# 准备工作
+
+我们首先创建一个新的白鹭游戏项目，并在项目的 resource/config/ 文件夹中添加10个配置文件，分别命名为1.json / 2.json ,并在 Egret Wing 中将这些文件加到 default.res.json 的 preload 组中。然后编写如下代码
+
+```typescript
+
+await RES.loadConfig("default.res.json", "resource/");
+await RES.loadGroup("preload", 0, loadingView);
+const json = RES.getRes("1_json");
+console.log(json)
+```
+上述代码执行后，观察 Chrome Devtools 的 Network 面板，会发现游戏会加载10个配置文件
+
+![加载10个配置文件]({{ "/assets/2018-07-24-optimize-loading-performance-via-customized-plugin-of-building-pipeline-2.png" | absolute_url }})
 
 
-# 步骤一：自动合并功能
+准备工作完成后，我们就开始尝试为这个项目的资源加载效率进行优化
 
-通过扩展白鹭引擎的构建管线，为期编写一个插件，我们可以很轻松的实现配置文件的自动合并功能。具体代码如下：
 
+
+## 步骤一：自动合并功能
+
+通过扩展白鹭引擎的构建管线编写一个插件，我们可以很轻松的实现配置文件的自动合并功能。具体代码如下：
+
+
+在 ```scripts/myplugin.ts``` 中添加：
 
 ```typescript
 export class MergeJSONPlugin implements plugins.Command {
@@ -92,7 +112,45 @@ export class MergeJSONPlugin implements plugins.Command {
 }
 ```
 
-# 步骤二：修改运行时代码
+在 ```scripts/config.ts```中添加：
+
+```typescript
+import { MergeJSONPlugin } from './myplugin'; //引入 MergeJSONPlugin
+
+
+const config: ResourceManagerConfig = {
+
+
+    buildConfig: (params) => {
+
+        const { target, command, projectName, version } = params;
+        if (command == 'build') {
+            const outputDir = '.';
+            return {
+                outputDir,
+                commands: [
+                    new ExmlPlugin('debug'), 
+                    new IncrementCompilePlugin(),
+                    new MergeJSONPlugin(), // 添加 MergeJSONPlugin
+                ]
+            }
+        }
+        else if (command == 'publish') {
+            // 在这里也需要 添加 MergeJSONPlugin，具体代码略
+        }
+}
+```
+
+上述功能添加完毕后，无论执行 ```egret build``` 还是 ```egret publish```，均会生成一个名为 ```total.json```的文件，其中已经对所有的JSON文件进行了合并。 
+
+
+## 步骤二：修改运行时代码
+
+
+生成了合并后的配置文件后，如果运行项目，会发现加载的仍然是合并前的配置文件，这需要我们对项目进行一些调整，具体调整方式如下：
+
+首先，编写一个 JSONProcessor，用于处理 JSON 类型的数据
+
 
 ```typescript
 class JSONProcessor implements RES.processor.Processor {
@@ -128,3 +186,27 @@ class JSONProcessor implements RES.processor.Processor {
     }
 }
 ```
+
+之后，在游戏项目的启动入口，使用新的 JSONProcessor 覆盖掉引擎内置的 JSONProcessor，具体代码如下：
+
+```typescript
+RES.processor.map("json", new JSONProcessor())
+```
+
+修改完这两处代码后，所有的加载逻辑都不会按照引擎默认的方式去加载配置文件，而是从合并后的配置文件中提取对应的部分返回给上层逻辑。
+
+
+通过这种方式，开发者完全无需调整业务逻辑代码，就实现了加载合并后的配置文件的功能。
+
+
+
+# 总结
+
+通过这篇教程，开发者可以了解到：
+
+* 合并 HTTP 请求可以优化加载效率的原理
+* 如何将 AssetsManager 和构建管线自定义插件配合使用，合并 HTTP 请求，优化加载速度
+* 如何在整个过程中不对具体的业务逻辑进行修改
+
+
+项目源码您可以在 https://github.com/WanderWang/Egret_MergeJSON 下载
